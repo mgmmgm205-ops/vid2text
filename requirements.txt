@@ -3,5 +3,5 @@ flask-cors
 openai
 supabase
 gunicorn
-youtube-transcript-api
+yt-dlp
 requests
