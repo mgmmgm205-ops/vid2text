@@ -4,4 +4,3 @@ openai
 supabase
 gunicorn
 yt-dlp
-ffmpeg-python
