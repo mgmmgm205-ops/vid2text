@@ -1,16 +1,18 @@
 from flask import Flask, request, jsonify, make_response
 from flask_cors import CORS
 import openai
+import assemblyai as aai
 import os
-import tempfile
-import subprocess
 import re
 
 app = Flask(__name__)
 CORS(app)
 
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+ASSEMBLYAI_API_KEY = os.environ.get("ASSEMBLYAI_API_KEY")
+
 client = openai.OpenAI(api_key=OPENAI_API_KEY)
+aai.settings.api_key = ASSEMBLYAI_API_KEY
 
 @app.after_request
 def after_request(response):
@@ -18,42 +20,6 @@ def after_request(response):
     response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
     response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
     return response
-
-def get_video_id(url):
-    patterns = [
-        r'(?:v=|/)([0-9A-Za-z_-]{11}).*',
-        r'youtu\.be/([0-9A-Za-z_-]{11})',
-        r'shorts/([0-9A-Za-z_-]{11})'
-    ]
-    for p in patterns:
-        m = re.search(p, url)
-        if m:
-            return m.group(1)
-    return None
-
-def download_with_ytdlp(url, output_dir):
-    """تنزيل الصوت باستخدام yt-dlp"""
-    output_path = os.path.join(output_dir, 'audio.%(ext)s')
-    cmd = [
-        'python3', '-m', 'yt_dlp',
-        '-x',
-        '--audio-format', 'mp3',
-        '--audio-quality', '96K',
-        '--no-playlist',
-        '--quiet',
-        '--no-warnings',
-        '-o', output_path,
-        url
-    ]
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-        for f in os.listdir(output_dir):
-            full_path = os.path.join(output_dir, f)
-            if os.path.isfile(full_path) and f.startswith('audio'):
-                return full_path
-    except Exception as e:
-        print(f"yt-dlp error: {e}")
-    return None
 
 @app.route('/api/transcribe', methods=['GET', 'POST', 'OPTIONS'])
 def transcribe():
@@ -66,40 +32,52 @@ def transcribe():
         if not url:
             return jsonify({"success": False, "error": "مفيش رابط"})
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            audio_file = download_with_ytdlp(url, tmpdir)
-            
-            if not audio_file or not os.path.exists(audio_file):
-                return jsonify({
-                    "success": False,
-                    "error": "فشل تنزيل الفيديو. تأكد من الرابط أو جرب رابط تاني."
-                })
-            
-            # تفريغ بـ Whisper
-            with open(audio_file, 'rb') as f:
-                transcript = client.audio.transcriptions.create(
-                    model="whisper-1",
-                    file=f,
-                    response_format="verbose_json"
-                )
-            
-            segments = []
-            if hasattr(transcript, 'segments') and transcript.segments:
-                for seg in transcript.segments:
-                    mins = int(seg.start // 60)
-                    secs = int(seg.start % 60)
-                    segments.append({
-                        "t": f"{mins:02d}:{secs:02d}",
-                        "txt": seg.text.strip()
-                    })
-            else:
-                segments = [{"t": "00:00", "txt": transcript.text}]
-            
+        # تفريغ مباشر بـ AssemblyAI
+        config = aai.TranscriptionConfig(
+            language_detection=True,
+            punctuate=True,
+            format_text=True
+        )
+        
+        transcriber = aai.Transcriber(config=config)
+        transcript = transcriber.transcribe(url)
+        
+        if transcript.status == aai.TranscriptStatus.error:
             return jsonify({
-                "success": True,
-                "segments": segments,
-                "text": transcript.text
+                "success": False,
+                "error": f"فشل التفريغ: {transcript.error}"
             })
+        
+        # تحويل النتيجة لـ segments
+        segments = []
+        if transcript.utterances:
+            for utt in transcript.utterances:
+                mins = int(utt.start / 60000)
+                secs = int((utt.start % 60000) / 1000)
+                segments.append({
+                    "t": f"{mins:02d}:{secs:02d}",
+                    "txt": utt.text.strip()
+                })
+        elif transcript.words:
+            # تقسيم كل 20 كلمة
+            words = transcript.words
+            for i in range(0, len(words), 20):
+                chunk = words[i:i+20]
+                mins = int(chunk[0].start / 60000)
+                secs = int((chunk[0].start % 60000) / 1000)
+                text = ' '.join([w.text for w in chunk])
+                segments.append({
+                    "t": f"{mins:02d}:{secs:02d}",
+                    "txt": text
+                })
+        else:
+            segments = [{"t": "00:00", "txt": transcript.text}]
+        
+        return jsonify({
+            "success": True,
+            "segments": segments,
+            "text": transcript.text
+        })
             
     except Exception as e:
         return jsonify({"success": False, "error": str(e)})
