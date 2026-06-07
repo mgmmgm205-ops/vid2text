@@ -10,18 +10,20 @@ app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
 
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-SUPABASE_URL = os.environ.get("SUPABASE_URL")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
-
 client = openai.OpenAI(api_key=OPENAI_API_KEY)
 
-def install_yt_dlp():
-    try:
-        import yt_dlp
-        return True
-    except:
-        subprocess.check_call([sys.executable, '-m', 'pip', 'install', 'yt-dlp', '-q'])
-        return True
+def download_audio(url, output_path):
+    cmd = [
+        'yt-dlp',
+        '-x',
+        '--audio-format', 'mp3',
+        '--audio-quality', '128K',
+        '-o', output_path,
+        '--no-playlist',
+        url
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    return result.returncode == 0
 
 @app.route('/api/transcribe', methods=['POST', 'OPTIONS'])
 def transcribe():
@@ -34,37 +36,20 @@ def transcribe():
         if not url:
             return jsonify({"success": False, "error": "مفيش رابط"})
 
-        # تنزيل الصوت من الفيديو
-        install_yt_dlp()
-        import yt_dlp
-        
         with tempfile.TemporaryDirectory() as tmpdir:
-            audio_path = os.path.join(tmpdir, 'audio.mp3')
+            audio_path = os.path.join(tmpdir, 'audio.%(ext)s')
             
-            ydl_opts = {
-                'format': 'bestaudio/best',
-                'outtmpl': os.path.join(tmpdir, 'audio.%(ext)s'),
-                'postprocessors': [{
-                    'key': 'FFmpegExtractAudio',
-                    'preferredcodec': 'mp3',
-                    'preferredquality': '128',
-                }],
-                'quiet': True,
-                'no_warnings': True,
-            }
-            
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                ydl.download([url])
+            success = download_audio(url, audio_path)
             
             # إيجاد الملف الصوتي
             audio_file = None
             for f in os.listdir(tmpdir):
-                if f.endswith('.mp3') or f.endswith('.m4a') or f.endswith('.webm'):
+                if f.startswith('audio'):
                     audio_file = os.path.join(tmpdir, f)
                     break
             
-            if not audio_file:
-                return jsonify({"success": False, "error": "فشل تنزيل الصوت"})
+            if not audio_file or not os.path.exists(audio_file):
+                return jsonify({"success": False, "error": "فشل تنزيل الصوت - تأكد من الرابط"})
             
             # تفريغ بـ OpenAI Whisper
             with open(audio_file, 'rb') as f:
@@ -74,7 +59,6 @@ def transcribe():
                     response_format="verbose_json"
                 )
             
-            # تحويل النتيجة
             segments = []
             if hasattr(transcript, 'segments') and transcript.segments:
                 for seg in transcript.segments:
@@ -105,17 +89,21 @@ def handle_tool(tool):
         text = data.get('text', '')
         
         prompts = {
-            'summary': f'لخص النص ده في 5 نقاط مهمة بالعربي:\n{text[:3000]}',
+            'summary': f'لخص النص ده في 5 نقاط مهمة:\n{text[:3000]}',
             'article': f'اكتب مقال SEO احترافي من النص ده:\n{text[:3000]}',
-            'mcq': f'اعمل 10 أسئلة MCQ من النص ده مع 4 خيارات والإجابة الصح:\n{text[:3000]}',
+            'mcq': f'اعمل 10 أسئلة MCQ من النص ده مع 4 خيارات والإجابة:\n{text[:3000]}',
             'translate': f'ترجم النص ده للإنجليزي:\n{text[:3000]}',
-            'clean': f'نظف ورتب النص ده وإزالة التكرار:\n{text[:3000]}',
-            'keywords': f'استخرج أهم 10 كلمات مفتاحية SEO من النص ده:\n{text[:3000]}',
-            'social': f'اكتب 3 بوستات سوشيال ميديا (تويتر - إنستجرام - لينكدإن) من النص ده:\n{text[:3000]}',
-            'qa': f'اعمل 5 أسئلة وأجوبة مفيدة من النص ده:\n{text[:3000]}',
-            'mindmap': f'اعمل خريطة ذهنية نصية من النص ده:\n{text[:3000]}',
-            'cert': f'اكتب نص شهادة إتمام احترافية بناءً على النص ده:\n{text[:3000]}',
+            'clean': f'نظف ورتب النص ده:\n{text[:3000]}',
+            'keywords': f'استخرج أهم 10 كلمات مفتاحية من النص ده:\n{text[:3000]}',
+            'social': f'اكتب 3 بوستات سوشيال من النص ده:\n{text[:3000]}',
+            'qa': f'اعمل 5 أسئلة وأجوبة من النص ده:\n{text[:3000]}',
+            'mindmap': f'اعمل خريطة ذهنية من النص ده:\n{text[:3000]}',
+            'cert': f'اكتب نص شهادة إتمام من النص ده:\n{text[:3000]}',
+            'ppt': f'اعمل مخطط PowerPoint من النص ده:\n{text[:3000]}',
             'compare': f'حلل وقارن المحتوى ده:\n{text[:3000]}',
+            'srt': f'حول النص ده لصيغة SRT:\n{text[:3000]}',
+            'template': f'اعمل قالب احترافي من النص ده:\n{text[:3000]}',
+            'podcast': f'اكتب سكريبت بودكاست من النص ده:\n{text[:3000]}',
         }
         
         prompt = prompts.get(tool, f'حلل النص ده:\n{text[:3000]}')
