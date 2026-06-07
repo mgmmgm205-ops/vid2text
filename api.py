@@ -19,7 +19,7 @@ def transcribe():
         return make_response('', 200)
     try:
         # جلب الـ Key مباشرة هنا
-        ASSEMBLYAI_KEY = os.environ.get("ASSEMBLYAI_API_KEY") or os.environ.get("assemblyai_api_key", "")
+        ASSEMBLYAI_KEY = (os.environ.get("ASSEMBLYAI_API_KEY") or os.environ.get("assemblyai_api_key", "")).strip()
         
         if not ASSEMBLYAI_KEY:
             return jsonify({
@@ -105,7 +105,7 @@ def handle_tool(tool):
 
 @app.route('/health')
 def health():
-    key = os.environ.get("ASSEMBLYAI_API_KEY", "")
+    key = os.environ.get("ASSEMBLYAI_API_KEY", "").strip()
     all_keys = [k for k in os.environ.keys() if 'API' in k or 'KEY' in k]
     return jsonify({
         "status": "ok",
