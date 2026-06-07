@@ -1155,8 +1155,8 @@ async function doExtract() {
     });
     const data = await res.json();
     if(data.success) {
-      transcript = [{t:'00:00', txt: data.text}];
-      fullText = data.text;
+      transcript = data.segments || [{t:'00:00', txt: data.text}];
+      fullText = data.text || transcript.map(s=>s.txt).join(' ');
       hideLoading();
       document.getElementById('btnGo').disabled = false;
       renderTranscript();
