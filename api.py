@@ -1,57 +1,61 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, make_response
 from flask_cors import CORS
 import openai
 import os
 import tempfile
 import subprocess
-import sys
 
 app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": "*"}})
+CORS(app)
 
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 client = openai.OpenAI(api_key=OPENAI_API_KEY)
 
-def download_audio(url, output_path):
+def add_cors_headers(response):
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
+    return response
+
+@app.after_request
+def after_request(response):
+    return add_cors_headers(response)
+
+def download_audio(url, output_dir):
     cmd = [
         'yt-dlp',
         '-x',
         '--audio-format', 'mp3',
-        '--audio-quality', '128K',
-        '-o', output_path,
+        '-o', os.path.join(output_dir, 'audio.%(ext)s'),
         '--no-playlist',
+        '--quiet',
         url
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    return result.returncode == 0
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    for f in os.listdir(output_dir):
+        if f.startswith('audio'):
+            return os.path.join(output_dir, f)
+    return None
 
-@app.route('/api/transcribe', methods=['POST', 'OPTIONS'])
+@app.route('/api/transcribe', methods=['GET', 'POST', 'OPTIONS'])
 def transcribe():
     if request.method == 'OPTIONS':
-        return jsonify({}), 200
+        response = make_response('', 200)
+        return add_cors_headers(response)
+    
     try:
-        data = request.json
-        url = data.get('url', '')
+        data = request.get_json(force=True)
+        url = data.get('url', '') if data else ''
         
         if not url:
             return jsonify({"success": False, "error": "مفيش رابط"})
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            audio_path = os.path.join(tmpdir, 'audio.%(ext)s')
+            audio_file = download_audio(url, tmpdir)
             
-            success = download_audio(url, audio_path)
+            if not audio_file:
+                return jsonify({"success": False, "error": "فشل تنزيل الصوت"})
             
-            # إيجاد الملف الصوتي
-            audio_file = None
-            for f in os.listdir(tmpdir):
-                if f.startswith('audio'):
-                    audio_file = os.path.join(tmpdir, f)
-                    break
-            
-            if not audio_file or not os.path.exists(audio_file):
-                return jsonify({"success": False, "error": "فشل تنزيل الصوت - تأكد من الرابط"})
-            
-            # تفريغ بـ OpenAI Whisper
             with open(audio_file, 'rb') as f:
                 transcript = client.audio.transcriptions.create(
                     model="whisper-1",
@@ -80,33 +84,35 @@ def transcribe():
     except Exception as e:
         return jsonify({"success": False, "error": str(e)})
 
-@app.route('/api/<tool>', methods=['POST', 'OPTIONS'])
+@app.route('/api/<tool>', methods=['GET', 'POST', 'OPTIONS'])
 def handle_tool(tool):
     if request.method == 'OPTIONS':
-        return jsonify({}), 200
+        response = make_response('', 200)
+        return add_cors_headers(response)
+    
     try:
-        data = request.json
-        text = data.get('text', '')
+        data = request.get_json(force=True)
+        text = data.get('text', '') if data else ''
         
         prompts = {
-            'summary': f'لخص النص ده في 5 نقاط مهمة:\n{text[:3000]}',
-            'article': f'اكتب مقال SEO احترافي من النص ده:\n{text[:3000]}',
-            'mcq': f'اعمل 10 أسئلة MCQ من النص ده مع 4 خيارات والإجابة:\n{text[:3000]}',
-            'translate': f'ترجم النص ده للإنجليزي:\n{text[:3000]}',
-            'clean': f'نظف ورتب النص ده:\n{text[:3000]}',
-            'keywords': f'استخرج أهم 10 كلمات مفتاحية من النص ده:\n{text[:3000]}',
-            'social': f'اكتب 3 بوستات سوشيال من النص ده:\n{text[:3000]}',
-            'qa': f'اعمل 5 أسئلة وأجوبة من النص ده:\n{text[:3000]}',
-            'mindmap': f'اعمل خريطة ذهنية من النص ده:\n{text[:3000]}',
-            'cert': f'اكتب نص شهادة إتمام من النص ده:\n{text[:3000]}',
-            'ppt': f'اعمل مخطط PowerPoint من النص ده:\n{text[:3000]}',
-            'compare': f'حلل وقارن المحتوى ده:\n{text[:3000]}',
-            'srt': f'حول النص ده لصيغة SRT:\n{text[:3000]}',
-            'template': f'اعمل قالب احترافي من النص ده:\n{text[:3000]}',
-            'podcast': f'اكتب سكريبت بودكاست من النص ده:\n{text[:3000]}',
+            'summary': f'لخص النص ده في 5 نقاط:\n{text[:3000]}',
+            'article': f'اكتب مقال SEO من النص ده:\n{text[:3000]}',
+            'mcq': f'اعمل 10 أسئلة MCQ من النص ده:\n{text[:3000]}',
+            'translate': f'ترجم للإنجليزي:\n{text[:3000]}',
+            'clean': f'نظف النص ده:\n{text[:3000]}',
+            'keywords': f'استخرج 10 كلمات مفتاحية:\n{text[:3000]}',
+            'social': f'اكتب بوستات سوشيال:\n{text[:3000]}',
+            'qa': f'اعمل 5 أسئلة وأجوبة:\n{text[:3000]}',
+            'mindmap': f'اعمل خريطة ذهنية:\n{text[:3000]}',
+            'ppt': f'اعمل مخطط PPT:\n{text[:3000]}',
+            'podcast': f'اكتب سكريبت بودكاست:\n{text[:3000]}',
+            'cert': f'اكتب شهادة إتمام:\n{text[:3000]}',
+            'srt': f'حول لـ SRT:\n{text[:3000]}',
+            'template': f'اعمل قالب:\n{text[:3000]}',
+            'compare': f'قارن المحتوى:\n{text[:3000]}',
         }
         
-        prompt = prompts.get(tool, f'حلل النص ده:\n{text[:3000]}')
+        prompt = prompts.get(tool, f'حلل:\n{text[:3000]}')
         
         response = client.chat.completions.create(
             model="gpt-4o-mini",
