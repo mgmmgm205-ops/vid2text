@@ -4,6 +4,7 @@ import openai
 import os
 import tempfile
 import subprocess
+import re
 
 app = Flask(__name__)
 CORS(app)
@@ -11,27 +12,25 @@ CORS(app)
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 client = openai.OpenAI(api_key=OPENAI_API_KEY)
 
-def add_cors_headers(response):
+@app.after_request
+def after_request(response):
     response.headers['Access-Control-Allow-Origin'] = '*'
     response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
     response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
     return response
-
-@app.after_request
-def after_request(response):
-    return add_cors_headers(response)
 
 def download_audio(url, output_dir):
     cmd = [
         'yt-dlp',
         '-x',
         '--audio-format', 'mp3',
+        '--audio-quality', '128K',
         '-o', os.path.join(output_dir, 'audio.%(ext)s'),
         '--no-playlist',
         '--quiet',
         url
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    subprocess.run(cmd, capture_output=True, text=True, timeout=180)
     for f in os.listdir(output_dir):
         if f.startswith('audio'):
             return os.path.join(output_dir, f)
@@ -40,21 +39,17 @@ def download_audio(url, output_dir):
 @app.route('/api/transcribe', methods=['GET', 'POST', 'OPTIONS'])
 def transcribe():
     if request.method == 'OPTIONS':
-        response = make_response('', 200)
-        return add_cors_headers(response)
-    
+        return make_response('', 200)
     try:
         data = request.get_json(force=True)
         url = data.get('url', '') if data else ''
-        
         if not url:
             return jsonify({"success": False, "error": "مفيش رابط"})
 
         with tempfile.TemporaryDirectory() as tmpdir:
             audio_file = download_audio(url, tmpdir)
-            
             if not audio_file:
-                return jsonify({"success": False, "error": "فشل تنزيل الصوت"})
+                return jsonify({"success": False, "error": "فشل تنزيل الصوت - تأكد من الرابط"})
             
             with open(audio_file, 'rb') as f:
                 transcript = client.audio.transcriptions.create(
@@ -80,40 +75,34 @@ def transcribe():
                 "segments": segments,
                 "text": transcript.text
             })
-            
     except Exception as e:
         return jsonify({"success": False, "error": str(e)})
 
 @app.route('/api/<tool>', methods=['GET', 'POST', 'OPTIONS'])
 def handle_tool(tool):
     if request.method == 'OPTIONS':
-        response = make_response('', 200)
-        return add_cors_headers(response)
-    
+        return make_response('', 200)
     try:
         data = request.get_json(force=True)
         text = data.get('text', '') if data else ''
-        
         prompts = {
-            'summary': f'لخص النص ده في 5 نقاط:\n{text[:3000]}',
-            'article': f'اكتب مقال SEO من النص ده:\n{text[:3000]}',
-            'mcq': f'اعمل 10 أسئلة MCQ من النص ده:\n{text[:3000]}',
-            'translate': f'ترجم للإنجليزي:\n{text[:3000]}',
-            'clean': f'نظف النص ده:\n{text[:3000]}',
-            'keywords': f'استخرج 10 كلمات مفتاحية:\n{text[:3000]}',
-            'social': f'اكتب بوستات سوشيال:\n{text[:3000]}',
+            'summary': f'لخص النص ده في 5 نقاط مهمة:\n{text[:3000]}',
+            'article': f'اكتب مقال SEO احترافي من النص ده:\n{text[:3000]}',
+            'mcq': f'اعمل 10 أسئلة MCQ من النص ده مع 4 خيارات والإجابة:\n{text[:3000]}',
+            'translate': f'ترجم النص ده للإنجليزي:\n{text[:3000]}',
+            'clean': f'نظف ورتب النص ده:\n{text[:3000]}',
+            'keywords': f'استخرج أهم 10 كلمات مفتاحية:\n{text[:3000]}',
+            'social': f'اكتب 3 بوستات سوشيال:\n{text[:3000]}',
             'qa': f'اعمل 5 أسئلة وأجوبة:\n{text[:3000]}',
             'mindmap': f'اعمل خريطة ذهنية:\n{text[:3000]}',
             'ppt': f'اعمل مخطط PPT:\n{text[:3000]}',
             'podcast': f'اكتب سكريبت بودكاست:\n{text[:3000]}',
             'cert': f'اكتب شهادة إتمام:\n{text[:3000]}',
-            'srt': f'حول لـ SRT:\n{text[:3000]}',
+            'srt': f'حول النص لـ SRT:\n{text[:3000]}',
             'template': f'اعمل قالب:\n{text[:3000]}',
             'compare': f'قارن المحتوى:\n{text[:3000]}',
         }
-        
         prompt = prompts.get(tool, f'حلل:\n{text[:3000]}')
-        
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": prompt}],
