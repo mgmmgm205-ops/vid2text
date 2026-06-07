@@ -4,4 +4,5 @@ openai
 supabase
 gunicorn
 assemblyai
+yt-dlp
 requests
