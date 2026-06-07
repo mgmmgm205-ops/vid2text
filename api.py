@@ -35,16 +35,17 @@ def transcribe():
             return jsonify({"success": False, "error": "مفيش رابط"})
 
         # استخدام RapidAPI
-        api_url = "https://youtube-transcripts-transcribe-youtube-video-to-text.p.rapidapi.com/youtube/transcribe"
+        api_url = "https://youtube-transcripts-transcribe-youtube-video-to-text.p.rapidapi.com/transcribe"
         
         headers = {
             "x-rapidapi-key": RAPIDAPI_KEY,
-            "x-rapidapi-host": "youtube-transcripts-transcribe-youtube-video-to-text.p.rapidapi.com"
+            "x-rapidapi-host": "youtube-transcripts-transcribe-youtube-video-to-text.p.rapidapi.com",
+            "Content-Type": "application/json"
         }
         
-        params = {"url": url, "chunkSize": "5"}
+        payload = {"url": url}
         
-        response = requests.get(api_url, headers=headers, params=params, timeout=60)
+        response = requests.post(api_url, headers=headers, json=payload, timeout=60)
         result = response.json()
         
         if response.status_code != 200:
@@ -54,7 +55,10 @@ def transcribe():
         segments = []
         full_text = ""
         
-        if 'content' in result:
+        if 'transcription' in result:
+            full_text = result['transcription']
+            segments = [{"t": "00:00", "txt": full_text}]
+        elif 'content' in result:
             for item in result['content']:
                 offset = item.get('offset', 0)
                 mins = int(offset // 60)
