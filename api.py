@@ -2,14 +2,14 @@ from flask import Flask, request, jsonify, make_response
 from flask_cors import CORS
 import openai
 import os
-import requests
+import tempfile
+import subprocess
 import re
 
 app = Flask(__name__)
 CORS(app)
 
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-YOUTUBE_API_KEY = os.environ.get("YOUTUBE_API_KEY")
 client = openai.OpenAI(api_key=OPENAI_API_KEY)
 
 @app.after_request
@@ -31,48 +31,28 @@ def get_video_id(url):
             return m.group(1)
     return None
 
-def get_youtube_captions(video_id):
-    # جلب الترجمة من YouTube API
-    url = f"https://www.googleapis.com/youtube/v3/captions?part=snippet&videoId={video_id}&key={YOUTUBE_API_KEY}"
-    res = requests.get(url)
-    data = res.json()
-    
-    if 'items' not in data or not data['items']:
-        return None
-    
-    # اختار أول ترجمة متاحة
-    caption_id = data['items'][0]['id']
-    
-    # جلب محتوى الترجمة
-    caption_url = f"https://www.googleapis.com/youtube/v3/captions/{caption_id}?key={YOUTUBE_API_KEY}&tfmt=srt"
-    caption_res = requests.get(caption_url)
-    
-    return caption_res.text if caption_res.status_code == 200 else None
-
-def parse_srt(srt_text):
-    segments = []
-    blocks = srt_text.strip().split('\n\n')
-    for block in blocks:
-        lines = block.strip().split('\n')
-        if len(lines) >= 3:
-            time_line = lines[1]
-            text = ' '.join(lines[2:])
-            start = time_line.split(' --> ')[0]
-            parts = start.replace(',', ':').split(':')
-            mins = int(parts[1])
-            secs = int(parts[2])
-            segments.append({
-                "t": f"{mins:02d}:{secs:02d}",
-                "txt": text.strip()
-            })
-    return segments
-
-def get_video_info(video_id):
-    url = f"https://www.googleapis.com/youtube/v3/videos?part=snippet&id={video_id}&key={YOUTUBE_API_KEY}"
-    res = requests.get(url)
-    data = res.json()
-    if 'items' in data and data['items']:
-        return data['items'][0]['snippet']
+def download_with_ytdlp(url, output_dir):
+    """تنزيل الصوت باستخدام yt-dlp"""
+    output_path = os.path.join(output_dir, 'audio.%(ext)s')
+    cmd = [
+        'python3', '-m', 'yt_dlp',
+        '-x',
+        '--audio-format', 'mp3',
+        '--audio-quality', '96K',
+        '--no-playlist',
+        '--quiet',
+        '--no-warnings',
+        '-o', output_path,
+        url
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        for f in os.listdir(output_dir):
+            full_path = os.path.join(output_dir, f)
+            if os.path.isfile(full_path) and f.startswith('audio'):
+                return full_path
+    except Exception as e:
+        print(f"yt-dlp error: {e}")
     return None
 
 @app.route('/api/transcribe', methods=['GET', 'POST', 'OPTIONS'])
@@ -86,47 +66,39 @@ def transcribe():
         if not url:
             return jsonify({"success": False, "error": "مفيش رابط"})
 
-        video_id = get_video_id(url)
-        if not video_id:
-            return jsonify({"success": False, "error": "رابط يوتيوب غير صحيح"})
-
-        # جرب جلب الترجمة
-        try:
-            from youtube_transcript_api import YouTubeTranscriptApi
+        with tempfile.TemporaryDirectory() as tmpdir:
+            audio_file = download_with_ytdlp(url, tmpdir)
             
-            try:
-                transcript_list = YouTubeTranscriptApi.get_transcript(video_id, languages=['ar'])
-            except:
-                try:
-                    transcript_list = YouTubeTranscriptApi.get_transcript(video_id, languages=['en'])
-                except:
-                    transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
+            if not audio_file or not os.path.exists(audio_file):
+                return jsonify({
+                    "success": False,
+                    "error": "فشل تنزيل الفيديو. تأكد من الرابط أو جرب رابط تاني."
+                })
+            
+            # تفريغ بـ Whisper
+            with open(audio_file, 'rb') as f:
+                transcript = client.audio.transcriptions.create(
+                    model="whisper-1",
+                    file=f,
+                    response_format="verbose_json"
+                )
             
             segments = []
-            full_text = ""
-            for item in transcript_list:
-                mins = int(item['start'] // 60)
-                secs = int(item['start'] % 60)
-                segments.append({
-                    "t": f"{mins:02d}:{secs:02d}",
-                    "txt": item['text'].strip()
-                })
-                full_text += item['text'] + " "
+            if hasattr(transcript, 'segments') and transcript.segments:
+                for seg in transcript.segments:
+                    mins = int(seg.start // 60)
+                    secs = int(seg.start % 60)
+                    segments.append({
+                        "t": f"{mins:02d}:{secs:02d}",
+                        "txt": seg.text.strip()
+                    })
+            else:
+                segments = [{"t": "00:00", "txt": transcript.text}]
             
             return jsonify({
                 "success": True,
                 "segments": segments,
-                "text": full_text.strip()
-            })
-            
-        except Exception as e:
-            # لو مفيش ترجمة
-            video_info = get_video_info(video_id)
-            title = video_info['title'] if video_info else url
-            
-            return jsonify({
-                "success": False,
-                "error": f"الفيديو '{title}' مش عنده ترجمة تلقائية. جرب فيديو تاني أو ارفع ملف صوتي مباشرة."
+                "text": transcript.text
             })
             
     except Exception as e:
@@ -141,19 +113,19 @@ def handle_tool(tool):
         text = data.get('text', '') if data else ''
         
         prompts = {
-            'summary': f'لخص النص ده في 5 نقاط مهمة:\n{text[:3000]}',
-            'article': f'اكتب مقال SEO احترافي من النص ده:\n{text[:3000]}',
-            'mcq': f'اعمل 10 أسئلة MCQ من النص ده مع 4 خيارات والإجابة:\n{text[:3000]}',
-            'translate': f'ترجم النص ده للإنجليزي:\n{text[:3000]}',
-            'clean': f'نظف ورتب النص ده:\n{text[:3000]}',
-            'keywords': f'استخرج أهم 10 كلمات مفتاحية:\n{text[:3000]}',
+            'summary': f'لخص في 5 نقاط:\n{text[:3000]}',
+            'article': f'اكتب مقال SEO:\n{text[:3000]}',
+            'mcq': f'اعمل 10 أسئلة MCQ:\n{text[:3000]}',
+            'translate': f'ترجم للإنجليزي:\n{text[:3000]}',
+            'clean': f'نظف النص:\n{text[:3000]}',
+            'keywords': f'استخرج 10 كلمات مفتاحية:\n{text[:3000]}',
             'social': f'اكتب 3 بوستات سوشيال:\n{text[:3000]}',
             'qa': f'اعمل 5 أسئلة وأجوبة:\n{text[:3000]}',
             'mindmap': f'اعمل خريطة ذهنية:\n{text[:3000]}',
             'ppt': f'اعمل مخطط PPT:\n{text[:3000]}',
             'podcast': f'اكتب سكريبت بودكاست:\n{text[:3000]}',
             'cert': f'اكتب شهادة إتمام:\n{text[:3000]}',
-            'srt': f'حول النص لـ SRT:\n{text[:3000]}',
+            'srt': f'حول لـ SRT:\n{text[:3000]}',
             'template': f'اعمل قالب:\n{text[:3000]}',
             'compare': f'قارن المحتوى:\n{text[:3000]}',
         }
