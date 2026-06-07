@@ -1135,17 +1135,40 @@ function selP(btn, type) {
 }
 
 // ===== EXTRACT =====
+// ===== BACKEND URL =====
+const BACKEND_URL = 'https://vid2text-production-b57a.up.railway.app';
+
 async function doExtract() {
   const url = document.getElementById('vu').value.trim();
   const file = document.getElementById('fg').files[0] || document.getElementById('fv').files[0] || document.getElementById('fa').files[0] || document.getElementById('fi').files[0];
 
   if(!url && !file) { alert('من فضلك أدخل رابط أو ارفع ملف'); return; }
 
-  // إظهار loading
   showLoading('⏳ جاري استخراج النص...');
   document.getElementById('btnGo').disabled = true;
 
-  // محاكاة API call مع نص تجريبي حقيقي
+  try {
+    const res = await fetch(`${BACKEND_URL}/api/transcribe`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({url: url})
+    });
+    const data = await res.json();
+    if(data.success) {
+      transcript = [{t:'00:00', txt: data.text}];
+      fullText = data.text;
+      hideLoading();
+      document.getElementById('btnGo').disabled = false;
+      renderTranscript();
+      document.getElementById('res').classList.add('show');
+      document.getElementById('res').scrollIntoView({behavior:'smooth', block:'start'});
+      document.getElementById('wcount').textContent = transcript.length + ' أسطر • ' + fullText.split(' ').length + ' كلمة';
+      return;
+    }
+  } catch(e) {
+    console.log('Backend error, using demo:', e);
+  }
+
   await new Promise(r => setTimeout(r, 2000));
 
   // نص تجريبي واقعي
@@ -1238,9 +1261,26 @@ async function executeTool(tool) {
   const out = document.getElementById('o-'+tool);
   if(!out) return;
   out.classList.add('show');
-  out.textContent = '⏳ جاري المعالجة...';
-  // scroll للأداة
+  out.textContent = '⏳ جاري المعالجة بالذكاء الاصطناعي...';
   out.scrollIntoView({behavior:'smooth', block:'nearest'});
+
+  // محاولة Backend أولاً
+  try {
+    const res = await fetch(`${BACKEND_URL}/api/${tool}`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({text: fullText, tool: tool})
+    });
+    if(res.ok) {
+      const data = await res.json();
+      if(data.success && data.result) {
+        out.textContent = data.result;
+        return;
+      }
+    }
+  } catch(e) {
+    console.log('Backend tool error:', e);
+  }
 
   const words = fullText.split(' ').filter(w=>w.length>3);
   await new Promise(r=>setTimeout(r, 1000));
