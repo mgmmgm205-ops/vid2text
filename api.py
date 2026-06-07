@@ -6,6 +6,14 @@ import os
 app = Flask(__name__)
 CORS(app)
 
+# جلب كل الـ Keys وتنظيفها عند البداية
+def get_env(key):
+    """جلب Environment Variable مع تنظيف الـ whitespace"""
+    for k, v in os.environ.items():
+        if k.strip() == key.strip():
+            return v.strip()
+    return ""
+
 @app.after_request
 def after_request(response):
     response.headers['Access-Control-Allow-Origin'] = '*'
@@ -18,13 +26,12 @@ def transcribe():
     if request.method == 'OPTIONS':
         return make_response('', 200)
     try:
-        # جلب الـ Key مباشرة هنا
-        ASSEMBLYAI_KEY = (os.environ.get("ASSEMBLYAI_API_KEY") or os.environ.get("assemblyai_api_key", "")).strip()
+        ASSEMBLYAI_KEY = get_env("ASSEMBLYAI_API_KEY")
         
         if not ASSEMBLYAI_KEY:
             return jsonify({
                 "success": False, 
-                "error": f"ASSEMBLYAI_API_KEY مفقود. المتغيرات الموجودة: {list(os.environ.keys())}"
+                "error": "ASSEMBLYAI_API_KEY مفقود"
             })
 
         data = request.get_json(force=True)
@@ -91,7 +98,7 @@ def handle_tool(tool):
             'compare': f'قارن المحتوى:\n{text[:3000]}',
         }
         
-        OPENAI_KEY = os.environ.get("OPENAI_API_KEY", "")
+        OPENAI_KEY = get_env("OPENAI_API_KEY")
         client = openai.OpenAI(api_key=OPENAI_KEY)
         prompt = prompts.get(tool, f'حلل:\n{text[:3000]}')
         response = client.chat.completions.create(
@@ -105,12 +112,11 @@ def handle_tool(tool):
 
 @app.route('/health')
 def health():
-    key = os.environ.get("ASSEMBLYAI_API_KEY", "").strip()
-    all_keys = [k for k in os.environ.keys() if 'API' in k or 'KEY' in k]
+    key = get_env("ASSEMBLYAI_API_KEY")
     return jsonify({
         "status": "ok",
         "assemblyai_key": "موجود ✅" if key else "مفقود ❌",
-        "all_api_keys": all_keys
+        "key_length": len(key)
     })
 
 if __name__ == '__main__':
