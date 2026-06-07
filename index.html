@@ -1166,7 +1166,11 @@ async function doExtract() {
       return;
     }
   } catch(e) {
-    console.log('Backend error, using demo:', e);
+    console.error('Backend error:', e);
+    hideLoading();
+    document.getElementById('btnGo').disabled = false;
+    alert('❌ خطأ في الاتصال بالسيرفر: ' + e.message);
+    return;
   }
 
   await new Promise(r => setTimeout(r, 2000));
