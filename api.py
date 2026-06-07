@@ -13,34 +13,38 @@ def after_request(response):
     response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
     return response
 
-def get_openai_client():
-    return openai.OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
-
-def get_assemblyai_transcriber():
-    import assemblyai as aai
-    aai.settings.api_key = os.environ.get("ASSEMBLYAI_API_KEY")
-    config = aai.TranscriptionConfig(
-        language_detection=True,
-        punctuate=True,
-        format_text=True
-    )
-    return aai.Transcriber(config=config)
-
 @app.route('/api/transcribe', methods=['GET', 'POST', 'OPTIONS'])
 def transcribe():
     if request.method == 'OPTIONS':
         return make_response('', 200)
     try:
+        # جلب الـ Key مباشرة هنا
+        ASSEMBLYAI_KEY = os.environ.get("ASSEMBLYAI_API_KEY") or os.environ.get("assemblyai_api_key", "")
+        
+        if not ASSEMBLYAI_KEY:
+            return jsonify({
+                "success": False, 
+                "error": f"ASSEMBLYAI_API_KEY مفقود. المتغيرات الموجودة: {list(os.environ.keys())}"
+            })
+
         data = request.get_json(force=True)
         url = data.get('url', '') if data else ''
         
         if not url:
             return jsonify({"success": False, "error": "مفيش رابط"})
 
-        transcriber = get_assemblyai_transcriber()
+        import assemblyai as aai
+        aai.settings.api_key = ASSEMBLYAI_KEY
+        
+        config = aai.TranscriptionConfig(
+            language_detection=True,
+            punctuate=True,
+            format_text=True
+        )
+        
+        transcriber = aai.Transcriber(config=config)
         transcript = transcriber.transcribe(url)
         
-        import assemblyai as aai
         if transcript.status == aai.TranscriptStatus.error:
             return jsonify({"success": False, "error": f"فشل التفريغ: {transcript.error}"})
         
@@ -87,8 +91,9 @@ def handle_tool(tool):
             'compare': f'قارن المحتوى:\n{text[:3000]}',
         }
         
+        OPENAI_KEY = os.environ.get("OPENAI_API_KEY", "")
+        client = openai.OpenAI(api_key=OPENAI_KEY)
         prompt = prompts.get(tool, f'حلل:\n{text[:3000]}')
-        client = get_openai_client()
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": prompt}],
@@ -101,9 +106,11 @@ def handle_tool(tool):
 @app.route('/health')
 def health():
     key = os.environ.get("ASSEMBLYAI_API_KEY", "")
+    all_keys = [k for k in os.environ.keys() if 'API' in k or 'KEY' in k]
     return jsonify({
         "status": "ok",
-        "assemblyai_key": "موجود ✅" if key else "مفقود ❌"
+        "assemblyai_key": "موجود ✅" if key else "مفقود ❌",
+        "all_api_keys": all_keys
     })
 
 if __name__ == '__main__':
