@@ -2,8 +2,7 @@ from flask import Flask, request, jsonify, make_response
 from flask_cors import CORS
 import openai
 import os
-import tempfile
-import subprocess
+import requests
 
 app = Flask(__name__)
 CORS(app)
@@ -26,76 +25,54 @@ def transcribe():
     if request.method == 'OPTIONS':
         return make_response('', 200)
     try:
-        ASSEMBLYAI_KEY = get_env("ASSEMBLYAI_API_KEY")
-        if not ASSEMBLYAI_KEY:
-            return jsonify({"success": False, "error": "ASSEMBLYAI_API_KEY مفقود"})
+        RAPIDAPI_KEY = get_env("RAPIDAPI_KEY")
+        if not RAPIDAPI_KEY:
+            return jsonify({"success": False, "error": "RAPIDAPI_KEY مفقود"})
 
         data = request.get_json(force=True)
         url = data.get('url', '') if data else ''
         if not url:
             return jsonify({"success": False, "error": "مفيش رابط"})
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            output_path = os.path.join(tmpdir, 'audio.%(ext)s')
-            
-            # تنزيل الصوت
-            cmd = [
-                'yt-dlp',
-                '-x',
-                '--audio-format', 'mp3',
-                '--audio-quality', '96K',
-                '--no-playlist',
-                '--quiet',
-                '--no-warnings',
-                '-o', output_path,
-                url
-            ]
-            
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
-            
-            # إيجاد الملف
-            audio_file = None
-            for f in os.listdir(tmpdir):
-                full_path = os.path.join(tmpdir, f)
-                if os.path.isfile(full_path):
-                    audio_file = full_path
-                    break
-            
-            if not audio_file:
-                return jsonify({
-                    "success": False,
-                    "error": f"فشل تنزيل الصوت: {result.stderr[:200]}"
-                })
-            
-            # رفع لـ AssemblyAI
-            import assemblyai as aai
-            aai.settings.api_key = ASSEMBLYAI_KEY
-            
-            config = aai.TranscriptionConfig(
-                language_detection=True,
-                punctuate=True,
-                format_text=True
-            )
-            
-            transcriber = aai.Transcriber(config=config)
-            transcript = transcriber.transcribe(audio_file)
-            
-            if transcript.status == aai.TranscriptStatus.error:
-                return jsonify({"success": False, "error": f"فشل التفريغ: {transcript.error}"})
-            
-            segments = []
-            if transcript.words:
-                words = transcript.words
-                for i in range(0, len(words), 20):
-                    chunk = words[i:i+20]
-                    mins = int(chunk[0].start / 60000)
-                    secs = int((chunk[0].start % 60000) / 1000)
-                    text = ' '.join([w.text for w in chunk])
-                    segments.append({"t": f"{mins:02d}:{secs:02d}", "txt": text})
-            else:
-                segments = [{"t": "00:00", "txt": transcript.text}]
-            
-            return jsonify({"success": True, "segments": segments, "text": transcript.text})
+        # استخدام RapidAPI
+        api_url = "https://youtube-transcripts-transcribe-youtube-video-to-text.p.rapidapi.com/youtube/transcribe"
+        
+        headers = {
+            "x-rapidapi-key": RAPIDAPI_KEY,
+            "x-rapidapi-host": "youtube-transcripts-transcribe-youtube-video-to-text.p.rapidapi.com"
+        }
+        
+        params = {"url": url, "chunkSize": "5"}
+        
+        response = requests.get(api_url, headers=headers, params=params, timeout=60)
+        result = response.json()
+        
+        if response.status_code != 200:
+            return jsonify({"success": False, "error": f"فشل API: {result}"})
+        
+        # تحويل النتيجة
+        segments = []
+        full_text = ""
+        
+        if 'content' in result:
+            for item in result['content']:
+                offset = item.get('offset', 0)
+                mins = int(offset // 60)
+                secs = int(offset % 60)
+                text = item.get('text', '')
+                segments.append({"t": f"{mins:02d}:{secs:02d}", "txt": text})
+                full_text += text + " "
+        elif 'text' in result:
+            segments = [{"t": "00:00", "txt": result['text']}]
+            full_text = result['text']
+        else:
+            return jsonify({"success": False, "error": f"نتيجة غير متوقعة: {result}"})
+        
+        return jsonify({
+            "success": True,
+            "segments": segments,
+            "text": full_text.strip()
+        })
             
     except Exception as e:
         return jsonify({"success": False, "error": str(e)})
@@ -140,10 +117,10 @@ def handle_tool(tool):
 
 @app.route('/health')
 def health():
-    key = get_env("ASSEMBLYAI_API_KEY")
+    rapidapi = get_env("RAPIDAPI_KEY")
     return jsonify({
         "status": "ok",
-        "assemblyai_key": "موجود ✅" if key else "مفقود ❌"
+        "rapidapi_key": "موجود ✅" if rapidapi else "مفقود ❌"
     })
 
 if __name__ == '__main__':
