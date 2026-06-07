@@ -1164,6 +1164,12 @@ async function doExtract() {
       document.getElementById('res').scrollIntoView({behavior:'smooth', block:'start'});
       document.getElementById('wcount').textContent = transcript.length + ' أسطر • ' + fullText.split(' ').length + ' كلمة';
       return;
+    } else {
+      // Backend رجع error
+      hideLoading();
+      document.getElementById('btnGo').disabled = false;
+      alert('❌ ' + (data.error || 'خطأ غير معروف'));
+      return;
     }
   } catch(e) {
     console.error('Backend error:', e);
